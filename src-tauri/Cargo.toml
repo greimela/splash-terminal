@@ -46,3 +46,14 @@ reqwest = { version = "0.11.23", default-features = false, features = [
 warp = "0.3.6"
 bech32 = "0.9.1"
 hickory-resolver = "0.24.1"
+
+chia-wallet-sdk = { git = "https://github.com/Rigidity/chia-wallet-sdk", rev = "41adc989c7a13aeb70b2a06def9ab8a9b5d0c990" }
+hex-literal = "0.4.1"
+hex = "0.4.3"
+clvm-traits = "0.11.0"
+clvmr = "0.8.0"
+chia-protocol = "0.11.0"
+chia-puzzles = "0.11.0"
+lazy_static = "1.5.0"
+chia-traits = "0.11.0"
+bs58 = "0.5.1"
