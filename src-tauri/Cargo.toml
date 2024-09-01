@@ -1,0 +1,48 @@
+[package]
+name = "splash-terminal"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "splash_terminal_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.0-rc", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0-rc", features = [] }
+tauri-plugin-shell = "2.0.0-rc"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3.30"
+libp2p = { version = "0.53.2", features = [
+    "tokio",
+    "gossipsub",
+    "kad",
+    "noise",
+    "macros",
+    "identify",
+    "tcp",
+    "yamux",
+    "secp256k1",
+    "dns",
+] }
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+env_logger = "0.11.1"
+clap = { version = "4.4.17", features = ["derive"] }
+reqwest = { version = "0.11.23", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+] }
+warp = "0.3.6"
+bech32 = "0.9.1"
+hickory-resolver = "0.24.1"
