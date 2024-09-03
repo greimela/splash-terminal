@@ -1,15 +1,25 @@
 import { useEffect, useState } from "react";
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import Header from './components/Header';
-import OfferTable from './components/OfferTable';
-import { Offer, Asset, NFTMetadata } from './types';
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import Header from "./components/Header";
+import OfferTable from "./components/OfferTable";
+import { Offer, Asset, NFTMetadata } from "./types";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from "./components/ui/card";
 
-const XCH_ASSET_IDS = ['xch', 'cfbfdeed5c4ca2de3d0bf520b9cb4bb7743a359bd2e6a188d19ce7dffc21d3e7'];
+const XCH_ASSET_IDS = [
+  "xch",
+  "0000000000000000000000000000000000000000000000000000000000000000",
+];
 const XCH_ASSET: Asset = {
-  id: 'xch',
-  code: 'XCH',
-  name: 'Chia',
+  id: "xch",
+  code: "XCH",
+  name: "Chia",
 };
 
 function App() {
@@ -18,22 +28,24 @@ function App() {
   const [numPeers, setNumPeers] = useState<number>(0);
 
   useEffect(() => {
-    listen<Offer>('new-offer', (event) => {
+    listen<Offer>("new-offer", (event) => {
       setOffers((prevOffers) => {
         const newOffer = event.payload;
         // Remove the old instance of the offer if it exists
-        const filteredOffers = prevOffers.filter(offer => offer.id !== newOffer.id);
+        const filteredOffers = prevOffers.filter(
+          (offer) => offer.id !== newOffer.id
+        );
         // Add the new offer at the beginning of the list
         return [newOffer, ...filteredOffers];
       });
     });
 
-    listen<number>('peer-status', (event) => {
-      console.log('peer-status', event.payload);
-      
+    listen<number>("peer-status", (event) => {
+      console.log("peer-status", event.payload);
+
       setNumPeers(event.payload);
     });
-    invoke<number>('fetch_num_peers').then((numPeers) => {
+    invoke<number>("fetch_num_peers").then((numPeers) => {
       setNumPeers(numPeers);
     });
   }, []);
@@ -48,13 +60,15 @@ function App() {
         return assets[assetId];
       }
 
-      if (assetId.startsWith('nft1')) {
-        const nftMetadata: NFTMetadata = await invoke('fetch_nft_metadata', { assetId });
+      if (assetId.startsWith("nft1")) {
+        const nftMetadata: NFTMetadata = await invoke("fetch_nft_metadata", {
+          assetId,
+        });
         setAssets((prevAssets) => ({ ...prevAssets, [assetId]: nftMetadata }));
         return nftMetadata;
       }
 
-      const asset: Asset = await invoke('fetch_asset', { assetId });
+      const asset: Asset = await invoke("fetch_asset", { assetId });
       setAssets((prevAssets) => ({ ...prevAssets, [assetId]: asset }));
       return asset;
     };
@@ -63,7 +77,9 @@ function App() {
       const allAssetIds = new Set<string>();
       offers.forEach((offer) => {
         Object.keys(offer.offered_assets).forEach((id) => allAssetIds.add(id));
-        Object.keys(offer.requested_assets).forEach((id) => allAssetIds.add(id));
+        Object.keys(offer.requested_assets).forEach((id) =>
+          allAssetIds.add(id)
+        );
       });
 
       for (const assetId of allAssetIds) {
@@ -75,14 +91,27 @@ function App() {
   }, [offers]);
 
   return (
-    <div className="min-h-screen dark bg-neutral-800 text-neutral-100">
-      <div className="container mx-auto p-4 ">
+    <div className="min-h-screen">
+      <div className="container mx-auto px-8 py-2">
         <Header numPeers={numPeers} />
         {offers.length > 0 ? (
-          <OfferTable offers={offers} assets={assets} />
+          <Card x-chunk="dashboard-05-chunk-3">
+            <CardHeader className="px-7">
+              <CardTitle>Offers</CardTitle>
+              <CardDescription>
+                Recent offers received via Splash!
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <OfferTable offers={offers} assets={assets} />
+            </CardContent>
+          </Card>
         ) : (
           <div className="text-center mt-8 text-neutral-400">
-            <p>No offers available yet. New offers will appear here as they are received.</p>
+            <p>
+              No offers available yet. New offers will appear here as they are
+              received.
+            </p>
           </div>
         )}
       </div>
