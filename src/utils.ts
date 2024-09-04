@@ -16,7 +16,7 @@ export function formatAmount(amount: number, assetId: string) {
   } else if (assetId.startsWith("nft1")) {
     return amount.toString();
   } else {
-    return amount / 1000;
+    return Math.floor((amount / 1000) * 10000) / 10000;
   }
 }
 
@@ -33,7 +33,7 @@ export function getAssetIconAndName(
   if (XCH_ASSET_IDS.includes(assetId)) {
     assetIcon = "https://icons.dexie.space/xch.webp";
   } else if (assetId.startsWith("nft1")) {
-    assetIcon = `https://assets.mainnet.mintgarden.io/thumbnails/${assetId}.webp`;
+    assetIcon = (asset as NFTMetadata)?.thumbnail_uri;
   } else {
     assetIcon = `https://icons.dexie.space/${assetId}.webp`;
   }

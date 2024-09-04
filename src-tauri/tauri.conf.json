@@ -11,9 +11,9 @@
   "app": {
     "windows": [
       {
-        "title": "splash-terminal",
-        "width": 800,
-        "height": 600
+        "title": "Splash! Terminal",
+        "width": 1280,
+        "height": 800
       }
     ],
     "security": {

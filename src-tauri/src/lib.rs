@@ -1,13 +1,21 @@
 use bech32::ToBase32;
-use chia_wallet_sdk::{CatLayer, Layer, NftInfo, Offer, Puzzle, SpendContext};
+use chia_protocol::{Bytes32, SpendBundle};
+use chia_puzzles::offer::SettlementPaymentsSolution;
+use chia_traits::Streamable;
+use chia_wallet_sdk::{
+    decode_offer_data, decompress_offer_bytes, CatLayer, Layer, NftInfo, OfferError, ParsedOffer,
+    Puzzle, SpendContext,
+};
 use clvmr::sha2::Sha256;
 
-use clvm_traits::ToClvm;
+use clvm_traits::{FromClvm, ToClvm};
 use clvmr::{Allocator, NodePtr};
 use futures::StreamExt;
 use hickory_resolver::TokioAsyncResolver;
+use indexmap::IndexMap;
 use libp2p::multiaddr::Protocol;
-use libp2p::{gossipsub, kad, noise, swarm::NetworkBehaviour, swarm::SwarmEvent, tcp, yamux};
+use libp2p::swarm::SwarmEvent;
+use libp2p::{gossipsub, kad, noise, swarm::NetworkBehaviour, tcp, yamux};
 use libp2p::{identify, identity, Multiaddr, StreamProtocol};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -19,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::command;
 use tauri::Emitter;
-use tokio::{io, select};
+use tokio::{io, select, sync::mpsc};
 
 #[derive(NetworkBehaviour)]
 struct SplashBehaviour {
@@ -34,24 +42,41 @@ lazy_static::lazy_static! {
     static ref PEER_COUNT: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
 }
 
+#[derive(Clone)]
+struct AppState {
+    offer_sender: mpsc::Sender<String>,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let (offer_sender, offer_receiver) = mpsc::channel::<String>(100);
+
+    let app_state = AppState { offer_sender };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            tauri::async_runtime::spawn(splash_network(app.handle().clone()));
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                splash_network(app_handle, offer_receiver).await.unwrap();
+            });
             Ok(())
         })
+        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             fetch_nft_metadata,
             fetch_asset,
-            fetch_num_peers
+            fetch_num_peers,
+            submit_offer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
-async fn splash_network(app_handle: tauri::AppHandle) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn splash_network(
+    app_handle: tauri::AppHandle,
+    mut offer_receiver: mpsc::Receiver<String>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialize the Splash network
     let id_keys = identity::Keypair::generate_ed25519();
 
@@ -181,6 +206,13 @@ async fn splash_network(app_handle: tauri::AppHandle) -> Result<(), Box<dyn Erro
                     }
                 },
                 _ => {}
+            },
+            Some(offer_string) = offer_receiver.recv() => {
+                println!("Received new offer to publish: {}", offer_string);
+                // We don't need to parse the offer here anymore, as it's already been parsed
+                if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), offer_string.as_bytes()) {
+                    eprintln!("Failed to publish offer: {:?}", e);
+                }
             }
         }
     }
@@ -193,12 +225,59 @@ struct OfferSummary {
     requested_assets: HashMap<String, u64>,
 }
 
+// TODO: move this to chia-wallet-sdk
+fn parse(spend_bundle: SpendBundle, allocator: &mut Allocator) -> Result<ParsedOffer, OfferError> {
+    let mut parsed = ParsedOffer {
+        aggregated_signature: spend_bundle.aggregated_signature,
+        coin_spends: Vec::new(),
+        requested_payments: IndexMap::new(),
+    };
+
+    for coin_spend in spend_bundle.coin_spends {
+        if coin_spend.coin.parent_coin_info != Bytes32::default() {
+            parsed.coin_spends.push(coin_spend);
+            continue;
+        }
+
+        if coin_spend.coin.amount != 0 {
+            parsed.coin_spends.push(coin_spend);
+            continue;
+        }
+
+        let solution = coin_spend.solution.to_clvm(allocator)?;
+        let settlement_solution = SettlementPaymentsSolution::from_clvm(allocator, solution)?;
+
+        let puzzle = coin_spend.puzzle_reveal.to_clvm(allocator)?;
+
+        let puzzle = Puzzle::parse(allocator, puzzle);
+
+        let mut asset_id = Bytes32::default();
+
+        if let Ok(Some(cat_layer)) = CatLayer::<NodePtr>::parse_puzzle(allocator, puzzle) {
+            asset_id = cat_layer.asset_id;
+        } else if let Ok(Some(nft)) = NftInfo::<NodePtr>::parse(allocator, puzzle) {
+            asset_id = nft.0.launcher_id;
+        }
+
+        parsed
+            .requested_payments
+            .entry(asset_id)
+            .or_insert_with(|| (puzzle, Vec::new()))
+            .1
+            .extend(settlement_solution.notarized_payments);
+    }
+
+    Ok(parsed)
+}
+
 fn parse_offer(
     offer_str: &str,
     allocator: &mut Allocator,
 ) -> Result<OfferSummary, Box<dyn std::error::Error>> {
-    let offer = Offer::decode(offer_str).unwrap();
-    let parsed_offer = offer.parse(allocator).unwrap();
+    // let offer = Offer::decode(offer_str).unwrap();
+    let spend_bundle =
+        SpendBundle::from_bytes(&decompress_offer_bytes(&decode_offer_data(offer_str)?)?).unwrap();
+    let parsed_offer = parse(spend_bundle, allocator).unwrap();
 
     let offer_id = {
         let mut hasher = Sha256::new();
@@ -214,18 +293,7 @@ fn parse_offer(
         let puzzle = coin_spend.puzzle_reveal.to_clvm(allocator)?;
         let puzzle = Puzzle::parse(allocator, puzzle);
 
-        let mut asset_id: String = "xch".to_string();
-
-        if let Ok(Some(cat_layer)) = CatLayer::<NodePtr>::parse_puzzle(allocator, puzzle) {
-            asset_id = hex::encode(cat_layer.asset_id);
-        } else if let Ok(Some(nft)) = NftInfo::<NodePtr>::parse(allocator, puzzle) {
-            asset_id = bech32::encode(
-                "nft",
-                nft.0.launcher_id.as_ref().to_base32(),
-                bech32::Variant::Bech32m,
-            )
-            .unwrap();
-        }
+        let asset_id = get_asset_id(allocator, puzzle);
 
         *offered_assets.entry(asset_id).or_insert(0) += coin_spend.coin.amount;
     }
@@ -245,6 +313,22 @@ fn parse_offer(
         offered_assets,
         requested_assets,
     })
+}
+
+fn get_asset_id(allocator: &mut Allocator, puzzle: Puzzle) -> String {
+    let mut asset_id: String = "xch".to_string();
+
+    if let Ok(Some(cat_layer)) = CatLayer::<NodePtr>::parse_puzzle(allocator, puzzle) {
+        asset_id = hex::encode(cat_layer.asset_id);
+    } else if let Ok(Some(nft)) = NftInfo::<NodePtr>::parse(allocator, puzzle) {
+        asset_id = bech32::encode(
+            "nft",
+            nft.0.launcher_id.as_ref().to_base32(),
+            bech32::Variant::Bech32m,
+        )
+        .unwrap();
+    }
+    asset_id
 }
 
 #[derive(Serialize)]
@@ -270,37 +354,40 @@ struct Asset {
 
 #[command]
 async fn fetch_nft_metadata(asset_id: String) -> Result<NFTMetadata, String> {
+    println!("Fetching NFT metadata: {}", asset_id);
     let url = format!("https://api.mintgarden.io/nfts/{}", asset_id);
     let response = Client::new()
         .get(&url)
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    let data = response
+    let json = response
         .json::<serde_json::Value>()
         .await
         .map_err(|e| e.to_string())?;
 
     Ok(NFTMetadata {
-        id: data["id"].as_str().unwrap().to_string(),
-        name: data["metadata_json"]["name"].as_str().unwrap().to_string(),
+        id: json["id"].as_str().unwrap().to_string(),
+        name: json["data"]["metadata_json"]["name"]
+            .as_str()
+            .unwrap()
+            .to_string(),
         collection: Collection {
-            name: data["metadata_json"]["collection"]["name"]
+            name: json["data"]["metadata_json"]["collection"]["name"]
                 .as_str()
                 .unwrap()
                 .to_string(),
         },
-        description: data["metadata_json"]["description"]
+        description: json["data"]["metadata_json"]["description"]
             .as_str()
             .unwrap()
             .to_string(),
-        thumbnail_uri: data["thumbnail_uri"].as_str().unwrap().to_string(),
+        thumbnail_uri: json["data"]["thumbnail_uri"].as_str().unwrap().to_string(),
     })
 }
 
 #[command]
 async fn fetch_asset(asset_id: String) -> Result<Asset, String> {
-    println!("Fetching asset: {}", asset_id);
     let url = format!(
         "https://dexie.space/v1/assets?page_size=25&page=1&type=all&code={}",
         asset_id
@@ -336,4 +423,26 @@ async fn fetch_asset(asset_id: String) -> Result<Asset, String> {
 #[command]
 async fn fetch_num_peers() -> Result<usize, String> {
     Ok(*PEER_COUNT.lock().map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+async fn submit_offer(
+    offer_string: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<OfferSummary, String> {
+    let mut ctx: SpendContext = SpendContext::new();
+
+    // Parse the offer first
+    let offer_summary = parse_offer(&offer_string, &mut ctx.allocator)
+        .map_err(|e| format!("Failed to parse offer: {}", e))?;
+
+    // If parsing succeeds, send the offer string to the channel
+    state
+        .offer_sender
+        .send(offer_string)
+        .await
+        .map_err(|e| format!("Failed to send offer: {}", e))?;
+
+    // Return the parsed offer summary
+    Ok(offer_summary)
 }

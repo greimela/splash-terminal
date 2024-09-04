@@ -11,6 +11,7 @@ import {
   CardDescription,
   CardContent,
 } from "./components/ui/card";
+import SubmitOfferDialog from "./components/SubmitOfferDialog";
 
 const XCH_ASSET_IDS = [
   "xch",
@@ -94,26 +95,23 @@ function App() {
     <div className="min-h-screen">
       <div className="container mx-auto px-8 py-2">
         <Header numPeers={numPeers} />
-        {offers.length > 0 ? (
-          <Card x-chunk="dashboard-05-chunk-3">
+
+        <Card x-chunk="dashboard-05-chunk-3">
+          <div className="flex justify-between items-center">
             <CardHeader className="px-7">
               <CardTitle>Offers</CardTitle>
               <CardDescription>
                 Recent offers received via Splash!
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <OfferTable offers={offers} assets={assets} />
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="text-center mt-8 text-neutral-400">
-            <p>
-              No offers available yet. New offers will appear here as they are
-              received.
-            </p>
+            <div className="flex justify-end p-6 px-7">
+              <SubmitOfferDialog />
+            </div>
           </div>
-        )}
+          <CardContent>
+            <OfferTable offers={offers} assets={assets} />
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
