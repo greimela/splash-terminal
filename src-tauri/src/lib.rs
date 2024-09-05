@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 use libp2p::{gossipsub, kad, noise, swarm::NetworkBehaviour, tcp, yamux};
-use libp2p::{identify, identity, StreamProtocol};
+use libp2p::{identify, identity, PeerId, StreamProtocol};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::command;
 use tauri::Emitter;
+use tokio::time;
 use tokio::{io, select, sync::mpsc};
 
 mod dns;
@@ -155,10 +156,15 @@ async fn splash_network(
     let topic = gossipsub::IdentTopic::new("/splash/offers/1");
     swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
 
+    let mut peer_discovery_interval = time::interval(time::Duration::from_secs(10));
+
     let mut ctx: SpendContext = SpendContext::new();
 
     loop {
         select! {
+            _ = peer_discovery_interval.tick() => {
+                swarm.behaviour_mut().kademlia.get_closest_peers(PeerId::random());
+            },
             event = swarm.select_next_some() => match event {
                 SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                     println!("Connected to peer: {peer_id}");
@@ -185,6 +191,30 @@ async fn splash_network(
                         // Send the offer to the frontend using a Tauri event
                         app_handle.emit("new-offer", offer_summary).unwrap();
                     }
+                },
+                SwarmEvent::Behaviour(SplashBehaviourEvent::Identify(identify::Event::Received { info: identify::Info { observed_addr, listen_addrs, .. }, peer_id, connection_id: _ })) => {
+                    for addr in listen_addrs {
+                        // If the node is advertising a non-global address, ignore it
+                        // TODO: also filter out ipv6 private addresses when rust API is finalized
+                        let is_non_global = addr.iter().any(|p| match p {
+                            Protocol::Ip4(addr) => addr.is_loopback() || addr.is_private(),
+                            Protocol::Ip6(addr) => addr.is_loopback(),
+                            _ => false,
+                        });
+
+                        if is_non_global {
+                            continue;
+                        }
+
+                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                    }
+                    // Mark the address observed for us by the external peer as confirmed.
+                    // TODO: We shouldn't trust this, instead we should confirm our own address manually or using
+                    // `libp2p-autonat`.
+                    swarm.add_external_address(observed_addr);
+                },
+                SwarmEvent::NewListenAddr { address, .. } => {
+                    println!("Listening on: {address}");
                 },
                 _ => {}
             },
