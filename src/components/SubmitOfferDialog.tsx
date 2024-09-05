@@ -46,7 +46,7 @@ function SubmitOfferDialog() {
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Submit Offer</DialogTitle>
+          <DialogTitle className="dark:text-white">Submit Offer</DialogTitle>
           <DialogDescription>
             Paste your offer string below and submit it to the Splash network
           </DialogDescription>

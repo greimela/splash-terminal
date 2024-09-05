@@ -149,7 +149,7 @@ async fn splash_network(
         .build();
 
     // Listen on a default address
-    swarm.listen_on("/ip4/0.0.0.0/tcp/11511".parse()?)?;
+    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
     // Create and subscribe to the Gossipsub topic
     let topic = gossipsub::IdentTopic::new("/splash/offers/1");
@@ -385,8 +385,6 @@ async fn fetch_asset(asset_id: String) -> Result<Asset, String> {
         .await
         .map_err(|e| e.to_string())?;
     let asset = &data["assets"][0];
-
-    println!("{:?}", asset);
 
     if asset.is_null() {
         return Ok(Asset {

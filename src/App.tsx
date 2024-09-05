@@ -92,7 +92,7 @@ function App() {
   }, [offers]);
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen dark:bg-black">
       <div className="container mx-auto px-8 py-2">
         <Header numPeers={numPeers} />
 

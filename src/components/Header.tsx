@@ -4,7 +4,7 @@ type HeaderProps = {
 
 function Header({ numPeers }: HeaderProps) {
   return (
-    <header className="sticky top-0 flex h-16 items-center gap-4 px-1">
+    <header className="sticky bg-white z-10 dark:bg-black top-0 flex h-16 items-center gap-4 px-1">
       <nav className="w-full font-medium flex flex-row items-center justify-end gap-5 text-sm lg:gap-6">
         <span className="text-sm text-neutral-600 dark:text-neutral-300 flex gap-2 items-center">
           <span className="flex h-2 w-2 relative">

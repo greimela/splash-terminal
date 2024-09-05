@@ -2,6 +2,7 @@ export type Offer = {
   id: string;
   offered_assets: Record<string, number>;
   requested_assets: Record<string, number>;
+  offer_string: string;
 };
 
 export type Asset = {
