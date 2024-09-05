@@ -11,23 +11,23 @@ use clvmr::sha2::Sha256;
 use clvm_traits::{FromClvm, ToClvm};
 use clvmr::{Allocator, NodePtr};
 use futures::StreamExt;
-use hickory_resolver::TokioAsyncResolver;
 use indexmap::IndexMap;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::SwarmEvent;
 use libp2p::{gossipsub, kad, noise, swarm::NetworkBehaviour, tcp, yamux};
-use libp2p::{identify, identity, Multiaddr, StreamProtocol};
+use libp2p::{identify, identity, StreamProtocol};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::command;
 use tauri::Emitter;
 use tokio::{io, select, sync::mpsc};
+
+mod dns;
 
 #[derive(NetworkBehaviour)]
 struct SplashBehaviour {
@@ -80,26 +80,10 @@ async fn splash_network(
     // Initialize the Splash network
     let id_keys = identity::Keypair::generate_ed25519();
 
-    let mut known_peers = Vec::new();
-
-    if known_peers.is_empty() {
-        println!("No known peers, bootstrapping from dexies dns introducer");
-
-        let resolver = TokioAsyncResolver::tokio_from_system_conf().unwrap();
-        let response = resolver.txt_lookup("_dnsaddr.splash.dexie.space.").await?;
-
-        for record in response.iter() {
-            for txt in record.txt_data() {
-                if let Ok(addr_str) = std::str::from_utf8(txt) {
-                    let addr_str = addr_str.trim_start_matches("dnsaddr="); // Remove "dnsaddr=" prefix
-
-                    if let Ok(peer_multiaddr) = Multiaddr::from_str(addr_str) {
-                        known_peers.push(peer_multiaddr);
-                    }
-                }
-            }
-        }
-    }
+    let known_peers = dns::resolve_peers_from_dns()
+        .await
+        .map_err(|e| format!("Failed to resolve peers from dns: {}", e))
+        .unwrap();
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(id_keys)
         .with_tokio()
@@ -133,11 +117,8 @@ async fn splash_network(
             )?;
 
             // Create a Kademlia behaviour.
-            let mut cfg = kad::Config::default();
-
-            cfg.set_protocol_names(vec![StreamProtocol::try_from_owned(
-                "/splash/kad/1".to_string(),
-            )?]);
+            let mut cfg =
+                kad::Config::new(StreamProtocol::try_from_owned("/splash/kad/1".to_string())?);
 
             cfg.set_query_timeout(Duration::from_secs(60));
             let store = kad::store::MemoryStore::new(key.public().to_peer_id());
@@ -168,7 +149,7 @@ async fn splash_network(
         .build();
 
     // Listen on a default address
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+    swarm.listen_on("/ip4/0.0.0.0/tcp/11511".parse()?)?;
 
     // Create and subscribe to the Gossipsub topic
     let topic = gossipsub::IdentTopic::new("/splash/offers/1");
@@ -223,6 +204,7 @@ struct OfferSummary {
     id: String,
     offered_assets: HashMap<String, u64>,
     requested_assets: HashMap<String, u64>,
+    offer_string: String,
 }
 
 // TODO: move this to chia-wallet-sdk
@@ -312,6 +294,7 @@ fn parse_offer(
         id: offer_id,
         offered_assets,
         requested_assets,
+        offer_string: offer_str.to_string(),
     })
 }
 
