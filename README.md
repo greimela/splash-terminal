@@ -61,6 +61,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 Licensed under the Apache License, Version 2.0.
 
-This project is based on the [Splash!](https://github.com/dexie-space/splash) project, which provides the underlying decentralized network for sharing Chia offers.
+## Acknowledgements
 
-Some code in `src-tauri/src` is taken from splash and is licensed under the MIT license.
+This project is based on the [Splash!](https://github.com/dexie-space/splash) project, which provides the underlying decentralized network for sharing Chia offers.

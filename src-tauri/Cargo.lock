@@ -973,8 +973,10 @@ checksum = "a21f936df1771bf62b77f047b726c4625ff2e8aa607c01ec06e5a05bd8463401"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-targets 0.52.6",
 ]
 
@@ -5992,38 +5994,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "splash"
+version = "0.0.11"
+source = "git+https://github.com/dexie-space/splash#7c16c04b689d7755d8ac4894293db78bd7b915a0"
+dependencies = [
+ "async-trait",
+ "bech32",
+ "clap",
+ "env_logger",
+ "futures",
+ "hickory-resolver",
+ "libp2p",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "warp",
+]
+
+[[package]]
 name = "splash-terminal"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bech32",
  "bs58",
  "chia-protocol",
  "chia-puzzles",
  "chia-traits 0.11.0",
  "chia-wallet-sdk",
- "clap",
+ "chrono",
  "clvm-traits",
  "clvmr",
- "env_logger",
- "futures",
  "hex",
  "hex-literal",
- "hickory-resolver",
  "indexmap 2.5.0",
  "lazy_static",
- "libp2p",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
+ "splash",
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",
  "tauri-plugin-sql",
  "tokio",
- "tracing",
- "tracing-subscriber",
- "warp",
 ]
 
 [[package]]

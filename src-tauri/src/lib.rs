@@ -8,36 +8,18 @@ use chia_wallet_sdk::{
 };
 use clvmr::sha2::Sha256;
 
+use chrono::{DateTime, Utc};
 use clvm_traits::{FromClvm, ToClvm};
 use clvmr::{Allocator, NodePtr};
-use futures::StreamExt;
 use indexmap::IndexMap;
-use libp2p::multiaddr::Protocol;
-use libp2p::swarm::SwarmEvent;
-use libp2p::{gossipsub, kad, noise, swarm::NetworkBehaviour, tcp, yamux};
-use libp2p::{identify, identity, PeerId, StreamProtocol};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use splash::{Splash, SplashEvent};
 use std::collections::HashMap;
-use std::error::Error;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tauri::command;
 use tauri::Emitter;
-use tokio::time;
-use tokio::{io, select, sync::mpsc};
-
-mod dns;
-
-#[derive(NetworkBehaviour)]
-struct SplashBehaviour {
-    gossipsub: gossipsub::Behaviour,
-    kademlia: kad::Behaviour<kad::store::MemoryStore>,
-    identify: identify::Behaviour,
-}
-
-const MAX_OFFER_SIZE: usize = 300 * 1024;
+use tokio::sync::mpsc;
 
 lazy_static::lazy_static! {
     static ref PEER_COUNT: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
@@ -77,152 +59,52 @@ pub fn run() {
 async fn splash_network(
     app_handle: tauri::AppHandle,
     mut offer_receiver: mpsc::Receiver<String>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Initialize the Splash network
-    let id_keys = identity::Keypair::generate_ed25519();
-
-    let known_peers = dns::resolve_peers_from_dns()
-        .await
-        .map_err(|e| format!("Failed to resolve peers from dns: {}", e))
-        .unwrap();
-
-    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(id_keys)
-        .with_tokio()
-        .with_tcp(
-            tcp::Config::default(),
-            noise::Config::new,
-            yamux::Config::default,
-        )?
-        .with_behaviour(|key| {
-            println!("Our Peer ID: {}", key.public().to_peer_id());
-
-            // We can take the hash of message and use it as an ID.
-            let unique_offer_fn = |message: &gossipsub::Message| {
-                let mut s = DefaultHasher::new();
-                Hash::hash(&message.data, &mut s);
-                gossipsub::MessageId::from(s.finish().to_string())
-            };
-
-            // Set a custom gossipsub configuration
-            let gossipsub_config = gossipsub::ConfigBuilder::default()
-                .heartbeat_interval(Duration::from_secs(5)) // This is set to aid debugging by not cluttering the log space
-                .message_id_fn(unique_offer_fn) // No duplicate offers will be propagated.
-                .max_transmit_size(MAX_OFFER_SIZE)
-                .build()
-                .map_err(|msg| io::Error::new(io::ErrorKind::Other, msg))?; // Temporary hack because `build` does not return a proper `std::error::Error`.
-
-            // build a gossipsub network behaviour
-            let gossipsub = gossipsub::Behaviour::new(
-                gossipsub::MessageAuthenticity::Signed(key.clone()),
-                gossipsub_config,
-            )?;
-
-            // Create a Kademlia behaviour.
-            let mut cfg =
-                kad::Config::new(StreamProtocol::try_from_owned("/splash/kad/1".to_string())?);
-
-            cfg.set_query_timeout(Duration::from_secs(60));
-            let store = kad::store::MemoryStore::new(key.public().to_peer_id());
-
-            let mut kademlia = kad::Behaviour::with_config(key.public().to_peer_id(), store, cfg);
-
-            // Add known peers to Kademlia
-            for addr in known_peers.iter() {
-                let Some(Protocol::P2p(peer_id)) = addr.iter().last() else {
-                    return Err("Expect peer multiaddr to contain peer ID.".into());
-                };
-                kademlia.add_address(&peer_id, addr.clone());
-            }
-
-            kademlia.bootstrap().unwrap();
-
-            let identify = identify::Behaviour::new(identify::Config::new(
-                "/splash/id/1".into(),
-                key.public().clone(),
-            ));
-
-            Ok(SplashBehaviour {
-                gossipsub,
-                kademlia,
-                identify,
-            })
-        })?
-        .build();
-
-    // Listen on a default address
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
-
-    // Create and subscribe to the Gossipsub topic
-    let topic = gossipsub::IdentTopic::new("/splash/offers/1");
-    swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
-
-    let mut peer_discovery_interval = time::interval(time::Duration::from_secs(10));
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (splash, mut events) = Splash::new().build().await?;
 
     let mut ctx: SpendContext = SpendContext::new();
 
     loop {
-        select! {
-            _ = peer_discovery_interval.tick() => {
-                swarm.behaviour_mut().kademlia.get_closest_peers(PeerId::random());
-            },
-            event = swarm.select_next_some() => match event {
-                SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                    println!("Connected to peer: {peer_id}");
-                    let num_peers = swarm.connected_peers().count();
-                    *PEER_COUNT.lock().unwrap() = num_peers;
-                    app_handle.emit("peer-status", num_peers).unwrap();
-                },
-                SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                    println!("Disconnected from peer: {peer_id}");
-                    let num_peers = swarm.connected_peers().count();
-                    *PEER_COUNT.lock().unwrap() = num_peers;
-                    app_handle.emit("peer-status", num_peers).unwrap();
-                },
-                SwarmEvent::Behaviour(SplashBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                    propagation_source: _,
-                    message_id: _,
-                    message,
-                })) => {
-                    let msg_str = String::from_utf8_lossy(&message.data).into_owned();
-                    if msg_str.starts_with("offer1") {
-                        let offer_summary = parse_offer(&msg_str, &mut ctx.allocator).unwrap();
+        tokio::select! {
+            Some(event) = events.recv() => {
+                match event {
+                    SplashEvent::Initialized(peer_id) => println!("Our Peer ID: {}", peer_id),
+                    SplashEvent::NewListenAddress(address) => println!("Listening on: {}", address),
+
+                    SplashEvent::PeerConnected(peer_id) => {
+                        println!("Connected to peer: {}", peer_id);
+
+                        *PEER_COUNT.lock().unwrap() += 1;
+                        let peer_count = *PEER_COUNT.lock().unwrap();
+                        app_handle.emit("peer-status", peer_count).unwrap();
+                    }
+
+                    SplashEvent::PeerDisconnected(peer_id) => {
+                        println!("Disconnected from peer: {}", peer_id);
+
+                        *PEER_COUNT.lock().unwrap() -= 1;
+                        let peer_count = *PEER_COUNT.lock().unwrap();
+                        app_handle.emit("peer-status", peer_count).unwrap();
+                    }
+
+                    SplashEvent::OfferReceived(offer_string) => {
+                        let offer_summary = parse_offer(&offer_string, &mut ctx.allocator).unwrap();
                         println!("Received Offer: {}", offer_summary.id);
 
                         // Send the offer to the frontend using a Tauri event
                         app_handle.emit("new-offer", offer_summary).unwrap();
                     }
-                },
-                SwarmEvent::Behaviour(SplashBehaviourEvent::Identify(identify::Event::Received { info: identify::Info { observed_addr, listen_addrs, .. }, peer_id, connection_id: _ })) => {
-                    for addr in listen_addrs {
-                        // If the node is advertising a non-global address, ignore it
-                        // TODO: also filter out ipv6 private addresses when rust API is finalized
-                        let is_non_global = addr.iter().any(|p| match p {
-                            Protocol::Ip4(addr) => addr.is_loopback() || addr.is_private(),
-                            Protocol::Ip6(addr) => addr.is_loopback(),
-                            _ => false,
-                        });
 
-                        if is_non_global {
-                            continue;
-                        }
-
-                        swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
+                    SplashEvent::OfferBroadcasted(offer) => println!("Broadcasted offer: {}", offer),
+                    SplashEvent::OfferBroadcastFailed(err) => {
+                        println!("Failed to broadcast offer: {}", err)
                     }
-                    // Mark the address observed for us by the external peer as confirmed.
-                    // TODO: We shouldn't trust this, instead we should confirm our own address manually or using
-                    // `libp2p-autonat`.
-                    swarm.add_external_address(observed_addr);
-                },
-                SwarmEvent::NewListenAddr { address, .. } => {
-                    println!("Listening on: {address}");
-                },
-                _ => {}
-            },
+                }
+            }
             Some(offer_string) = offer_receiver.recv() => {
                 println!("Received new offer to publish: {}", offer_string);
-                // We don't need to parse the offer here anymore, as it's already been parsed
-                if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), offer_string.as_bytes()) {
-                    eprintln!("Failed to publish offer: {:?}", e);
+                if let Err(e) = splash.submit_offer(&offer_string).await {
+                    eprintln!("Failed to broadcast offer: {:?}", e);
                 }
             }
         }
@@ -235,6 +117,7 @@ struct OfferSummary {
     offered_assets: HashMap<String, u64>,
     requested_assets: HashMap<String, u64>,
     offer_string: String,
+    timestamp: DateTime<Utc>,
 }
 
 // TODO: move this to chia-wallet-sdk
@@ -310,14 +193,23 @@ fn parse_offer(
         *offered_assets.entry(asset_id).or_insert(0) += coin_spend.coin.amount;
     }
 
-    for (asset_id, (_, notarized_payments)) in &parsed_offer.requested_payments {
+    for (asset_id, (puzzle, notarized_payments)) in &parsed_offer.requested_payments {
         let mut total_amount = 0;
         for notarized_payment in notarized_payments {
             for payment in &notarized_payment.payments {
                 total_amount += payment.amount;
             }
         }
-        *requested_assets.entry(hex::encode(asset_id)).or_insert(0) += total_amount;
+        let mut asset_id_string = hex::encode(asset_id);
+        if let Ok(Some(nft)) = NftInfo::<NodePtr>::parse(allocator, *puzzle) {
+            asset_id_string = bech32::encode(
+                "nft",
+                nft.0.launcher_id.as_ref().to_base32(),
+                bech32::Variant::Bech32m,
+            )
+            .unwrap();
+        }
+        *requested_assets.entry(asset_id_string).or_insert(0) += total_amount;
     }
 
     Ok(OfferSummary {
@@ -325,6 +217,7 @@ fn parse_offer(
         offered_assets,
         requested_assets,
         offer_string: offer_str.to_string(),
+        timestamp: Utc::now(),
     })
 }
 
