@@ -1,9 +1,10 @@
-export type Offer = {
+export interface Offer {
   id: string;
   offered_assets: Record<string, number>;
   requested_assets: Record<string, number>;
   offer_string: string;
-};
+  timestamp: string;
+}
 
 export type Asset = {
   id: string;

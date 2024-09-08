@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Offer, Asset, NFTMetadata } from "../types";
 import { formatAmount, getAssetIconAndName } from "../utils";
 import {
@@ -16,6 +16,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import dayjs from "dayjs";
+import relativeTime from "dayjs/plugin/relativeTime";
+
+dayjs.extend(relativeTime);
 
 type OfferTableProps = {
   offers: Offer[];
@@ -24,6 +28,15 @@ type OfferTableProps = {
 
 function OfferTable({ offers, assets }: OfferTableProps) {
   const [inspectedOffer, setInspectedOffer] = useState<Offer | null>(null);
+  const [, setUpdateTrigger] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setUpdateTrigger((prev) => prev + 1);
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const calculatePrice = (
     offered: Record<string, number>,
@@ -141,6 +154,7 @@ function OfferTable({ offers, assets }: OfferTableProps) {
             <TableHead>Requested</TableHead>
             <TableHead>Offered</TableHead>
             <TableHead>Price</TableHead>
+            <TableHead>Time Received</TableHead>
             <TableHead className="text-end">Actions</TableHead>
           </TableRow>
         </TableHeader>
@@ -162,6 +176,7 @@ function OfferTable({ offers, assets }: OfferTableProps) {
                   calculatePrice(offer.offered_assets, offer.requested_assets)
                 )}
               </TableCell>
+              <TableCell>{dayjs(offer.timestamp).fromNow()}</TableCell>
               <TableCell className="text-end">
                 <Button onClick={() => setInspectedOffer(offer)}>
                   Inspect
