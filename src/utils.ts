@@ -27,7 +27,8 @@ export function getAssetIconAndName(
   const asset = assets[assetId];
   const assetName = XCH_ASSET_IDS.includes(assetId)
     ? XCH_ASSET.code
-    : asset?.code || asset?.name || assetId;
+    : (asset && "code" in asset ? asset.code : asset?.name) || assetId;
+
   let assetIcon;
 
   if (XCH_ASSET_IDS.includes(assetId)) {
@@ -39,4 +40,11 @@ export function getAssetIconAndName(
   }
 
   return { assetName, assetIcon };
+}
+
+export function formatPrice(price: number): string {
+  return price.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  });
 }
